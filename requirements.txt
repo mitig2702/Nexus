@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+langchain>=0.3.0
+langchain-groq
+langchain-community
+langchain-qdrant
+qdrant-client
+fastembed
+upstash-redis
+requests
+pydantic
+python-dotenv
+apscheduler
+pypdf

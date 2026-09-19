@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "hearthline-member-request-operations",
+  "display_name": "Hearthline Coworking — Member Request Operations & Autonomous Agent",
+  "version": "2.0.0",
+  "description": "Autonomous member request classification, multi-step agent toolchain, priority surfacing, billing discrepancy courtesy resolution, and human review/override portal for Hearthline Coworking.",
+  "organization": "Hearthline Coworking",
+  "license": "MIT",
+  "runtimes": {
+    "python": ">=3.10",
+    "node": ">=18.0"
+  },
+  "entrypoints": {
+    "server": "python3 main.py",
+    "seed": "python3 seed.py",
+    "test": "python3 test_hearthline.py",
+    "frontend": "npm run dev --prefix frontend"
+  },
+  "datasets": [
+    {
+      "file": "member_requests.csv",
+      "format": "csv",
+      "description": "Continuous stream of incoming member-submitted requests across shared workspace locations.",
+      "columns": [
+        { "name": "request_id", "type": "string", "example": "REQ-101" },
+        { "name": "requester_name", "type": "string", "example": "Elena Rostova" },
+        { "name": "requester_tier", "type": "string", "enum": ["standard", "founding member"] },
+        { "name": "status", "type": "string", "enum": ["new", "open", "routed", "auto_closed", "resolved", "closed"] },
+        { "name": "submitted_at", "type": "datetime", "example": "2026-09-18 09:14:00" },
+        { "name": "body_text", "type": "string", "example": "I was overcharged $34 on my monthly desk billing invoice." }
+      ]
+    },
+    {
+      "file": "invoice.csv",
+      "format": "csv",
+      "description": "Ground-truth billing ledger used by the autonomous agent to verify discrepancies.",
+      "columns": [
+        { "name": "requester_name", "type": "string", "example": "Elena Rostova" },
+        { "name": "verified_discrepancy", "type": "string", "example": "$34 overcharge verified: incorrect recurring locker fee added to September desk invoice" }
+      ]
+    }
+  ],
+  "agents": [
+    {
+      "id": "hearthline_member_success_agent",
+      "name": "Hearthline Member Success Agent",
+      "type": "autonomous_multi_step_agent",
+      "module": "agent.py",
+      "class": "HearthlineAgent",
+      "trigger": "Invoked automatically upon member request submission (POST /requests/ingest) or batch execution (POST /requests/batch-process)",
+      "stages": [
+        {
+          "stage": 1,
+          "name": "Intent Classification",
+          "action": "Classifies text into 5 coworking categories with confidence score and uncertainty flag."
+        },
+        {
+          "stage": 2,
+          "name": "Duplicate & History Check",
+          "tool": "check_duplicate_or_history",
+          "condition": "Always called. If genuine duplicate detected, executes auto_close_request and acknowledge_request."
+        },
+        {
+          "stage": 3,
+          "name": "Context Retrieval for Uncertain Requests",
+          "tool": "pull_additional_context",
+          "condition": "Called if confidence < 0.70 or classification intent is ambiguous."
+        },
+        {
+          "stage": 4,
+          "name": "Dynamic Priority Calculation",
+          "action": "Calculates urgency score (1 to 4) using keyword severity (lockouts, leaks) and Founding Member VIP boosts to surface urgent tickets first."
+        },
+        {
+          "stage": 5,
+          "name": "Billing Discrepancy Verification & Autonomous Courtesy Resolution",
+          "tools": ["check_billing_record", "issue_courtesy_resolution"],
+          "condition": "Called when category is Billing and member describes a checkable discrepancy. Checks invoice.csv ledger and autonomously issues refund/credit."
+        },
+        {
+          "stage": 6,
+          "name": "Autonomous Routing & Acknowledgment",
+          "tools": ["auto_route_request", "acknowledge_request"],
+          "action": "Routes to the assigned team queue and dispatches acknowledgment with resolution reference."
+        },
+        {
+          "stage": 7,
+          "name": "State & Audit Trail Persistence",
+          "action": "Persists complete reasoning trace, tool calls, and status to SQLite database."
+        }
+      ]
+    },
+    {
+      "id": "interactive_chat_assistant",
+      "name": "Conversational Enterprise Assistant",
+      "type": "conversational_react_agent",
+      "module": "agent.py",
+      "trigger": "User chat requests via POST /ask or Slack events",
+      "capabilities": ["Policy Q&A via RAG", "Leave application", "Ticket creation", "Meeting summarization"]
+    },
+    {
+      "id": "background_sla_sweeper",
+      "name": "SLA Escalation Sweeper",
+      "type": "scheduled_background_daemon",
+      "module": "scheduler.py",
+      "trigger": "Cron every 30 minutes (SLA_SWEEP_MINUTES)",
+      "condition": "Open tickets exceeding 24h SLA are auto-escalated to high priority."
+    }
+  ],
+  "tools": [
+    {
+      "name": "check_duplicate_or_history",
+      "function": "tools.check_duplicate_or_history",
+      "description": "Searches past member request history for duplicate submissions or related open tickets."
+    },
+    {
+      "name": "pull_additional_context",
+      "function": "tools.pull_additional_context",
+      "description": "Retrieves supplementary context (member plan, location, assigned desk, active badge ID, policies) when classification is uncertain."
+    },
+    {
+      "name": "check_billing_record",
+      "function": "tools.check_billing_record",
+      "description": "Inspects real invoice records and verified discrepancies in invoice.csv / database."
+    },
+    {
+      "name": "issue_courtesy_resolution",
+      "function": "tools.issue_courtesy_resolution",
+      "description": "Autonomously issues courtesy credit, refund, or fee waiver when a verified billing discrepancy is identified."
+    },
+    {
+      "name": "acknowledge_request",
+      "function": "tools.acknowledge_request",
+      "description": "Autonomously acknowledges member requests with personalized message and estimated resolution time."
+    },
+    {
+      "name": "auto_close_request",
+      "function": "tools.auto_close_request",
+      "description": "Autonomously closes genuine duplicate tickets and links to the active original ticket."
+    },
+    {
+      "name": "auto_route_request",
+      "function": "tools.auto_route_request",
+      "description": "Autonomously routes requests to designated team queues with calculated priority."
+    }
+  ],
+  "taxonomy": {
+    "categories": [
+      "Access & Badge",
+      "Room Booking",
+      "Billing",
+      "Facility & Maintenance",
+      "Membership Change"
+    ],
+    "team_routing": {
+      "Access & Badge": "Access & Security Team",
+      "Room Booking": "Room & Event Operations Team",
+      "Billing": "Finance & Billing Team",
+      "Facility & Maintenance": "Facilities & Maintenance Team",
+      "Membership Change": "Member Success & Accounts Team"
+    },
+    "priorities": {
+      "urgent": { "score": 4, "surfacing_order": 1, "description": "Immediate lockouts, active leaks, or VIP founding member emergencies" },
+      "high": { "score": 3, "surfacing_order": 2, "description": "Equipment blockers, printer jams, or escalated items" },
+      "medium": { "score": 2, "surfacing_order": 3, "description": "Standard business operations and room bookings" },
+      "low": { "score": 1, "surfacing_order": 4, "description": "General inquiries or future month planning" }
+    }
+  },
+  "database": {
+    "default_engine": "sqlite",
+    "path": "hearthline.db",
+    "cloud_engine": "turso (libSQL)",
+    "tables": [
+      "member_requests",
+      "invoices",
+      "members",
+      "request_events"
+    ]
+  },
+  "api_endpoints": [
+    { "method": "GET", "path": "/", "description": "Interactive Web Portal for Member Request Operations" },
+    { "method": "GET", "path": "/portal", "description": "Interactive Web Portal for Member Request Operations" },
+    { "method": "GET", "path": "/health", "description": "Service health check" },
+    { "method": "GET", "path": "/stats", "description": "Dashboard operational metrics" },
+    { "method": "GET", "path": "/requests", "description": "List member requests (urgent surfaced first) with filters" },
+    { "method": "GET", "path": "/requests/{request_id}", "description": "Detailed request view with LLM reasoning and audit trail" },
+    { "method": "POST", "path": "/requests/ingest", "description": "Ingest single member request and run autonomous agent" },
+    { "method": "POST", "path": "/requests/batch-process", "description": "Run autonomous agent on all pending requests" },
+    { "method": "POST", "path": "/requests/{request_id}/override", "description": "Submit human review override" },
+    { "method": "GET", "path": "/invoices", "description": "List invoice records and verified discrepancies" },
+    { "method": "POST", "path": "/seed", "description": "Reset and reload seed datasets" }
+  ]
+}
